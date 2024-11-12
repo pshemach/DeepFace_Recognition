@@ -1,0 +1,4 @@
+ipykernel
+deepface
+flask
+-e .
