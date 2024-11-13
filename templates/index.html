@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Face Comparison</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Face Comparison</h1>
+
+      <form id="uploadForm">
+        <div class="upload-group">
+          <label for="img1">Upload Image 1:</label>
+          <input
+            type="file"
+            id="img1"
+            name="img1_path"
+            accept="image/*"
+            required
+          />
+        </div>
+
+        <div class="upload-group">
+          <label for="img2">Upload Image 2:</label>
+          <input
+            type="file"
+            id="img2"
+            name="img2_path"
+            accept="image/*"
+            required
+          />
+        </div>
+
+        <button type="submit">Compare Faces</button>
+      </form>
+
+      <h3 style="display: none" id="previewTitle">Preview</h3>
+      <div class="preview" id="previewSection" style="display: none">
+        <img id="imgPreview1" src="" alt="Image 1 Preview" />
+        <img id="imgPreview2" src="" alt="Image 2 Preview" />
+      </div>
+
+      <h3 style="display: none" id="resultTitle">Prediction Result</h3>
+      <div id="result" style="display: none"></div>
+    </div>
+
+    <script>
+      // Function to preview image using FileReader
+      function previewImage(input, previewElementId) {
+        const file = input.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = function (e) {
+            document.getElementById(previewElementId).src = e.target.result;
+            document.getElementById(previewElementId).style.display = "block";
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+
+      document.getElementById("img1").onchange = function () {
+        previewImage(this, "imgPreview1");
+        document.getElementById("previewTitle").style.display = "block";
+        document.getElementById("previewSection").style.display = "flex";
+      };
+
+      document.getElementById("img2").onchange = function () {
+        previewImage(this, "imgPreview2");
+        document.getElementById("previewTitle").style.display = "block";
+        document.getElementById("previewSection").style.display = "flex";
+      };
+
+      document.getElementById("uploadForm").onsubmit = async function (event) {
+        event.preventDefault();
+        const formData = new FormData();
+        formData.append("img1_path", document.getElementById("img1").files[0]);
+        formData.append("img2_path", document.getElementById("img2").files[0]);
+
+        // Send request to the Flask API
+        const response = await fetch("/compare_faces", {
+          method: "POST",
+          body: formData,
+        });
+
+        const resultDiv = document.getElementById("result");
+        resultDiv.innerHTML = ""; // Clear previous result
+
+        if (response.ok) {
+          const data = await response.json();
+          resultDiv.innerHTML = `<p>Matching: ${JSON.stringify(data)}</p>`;
+          document.getElementById("resultTitle").style.display = "block";
+          document.getElementById("result").style.display = "block";
+        } else {
+          const error = await response.json();
+          resultDiv.innerHTML = `<p style="color: red;">Error: ${error.error}</p>`;
+          document.getElementById("resultTitle").style.display = "block";
+          document.getElementById("result").style.display = "block";
+        }
+      };
+    </script>
+  </body>
+</html>

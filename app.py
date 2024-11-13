@@ -1,4 +1,3 @@
-from deepface import DeepFace
 import flask
 import os
 from werkzeug.utils import secure_filename

@@ -8,8 +8,7 @@ def verify_faces(image1, image2):
             image1, image2, model_name=FACE_MODEL[SELECTED_MODEL_KEY]
         )
         confidence = result["verified"]
-        distance = result["distance"]
 
-        return confidence, distance
+        return confidence
     except Exception as e:
         return str(e)

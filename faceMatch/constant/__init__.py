@@ -11,8 +11,8 @@ FACE_MODEL = [
     "GhostFaceNet",
 ]
 
-SELECTED_MODEL_KEY = 0
+SELECTED_MODEL_KEY = 1
 
-UPLOAD_FOLDER = "uploads"
+UPLOAD_FOLDER = "static/uploads"
 
 ALLOWED_FILE_EXTENSIONS = {"jpg", "jpeg", "png"}
