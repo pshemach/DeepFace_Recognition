@@ -1,4 +1,5 @@
 ipykernel
 deepface
 flask
+pyyaml
 -e .

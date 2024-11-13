@@ -2,56 +2,69 @@ from deepface import DeepFace
 import flask
 import os
 from werkzeug.utils import secure_filename
+from faceMatch.pipeline.verify_face import verify_faces
+from faceMatch.utils import make_dir
+from faceMatch.constant import UPLOAD_FOLDER
 
 app = flask.Flask(__name__)
 
-models = [
-    "VGG-Face", 
-    "Facenet", 
-    "Facenet512", 
-    "OpenFace", 
-    "DeepFace", 
-    "DeepID", 
-    "ArcFace", 
-    "Dlib", 
-    "SFace",
-    "GhostFaceNet",
-]
 
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-@app.route('/compare_faces', methods=['POST'])
+@app.route("/compare_faces", methods=["POST"])
 def compare_faces():
     try:
-        if 'img1_path' not in flask.request.files or 'img2_path' not in flask.request.files:
-            return flask.jsonify({'error': 'img1_path and img2_path are required'}), 400
+        # Check if both image files are present in the request
+        if (
+            "img1_path" not in flask.request.files
+            or "img2_path" not in flask.request.files
+        ):
+            return flask.jsonify({"error": "img1_path and img2_path are required"}), 400
 
-        img1 = flask.request.files['img1_path']
-        img2 = flask.request.files['img2_path']
-        model_name = flask.request.form.get('model_name', models[0])
+        img1 = flask.request.files["img1_path"]
+        img2 = flask.request.files["img2_path"]
 
-        if model_name not in models:
-            return flask.jsonify({'error': f'Invalid model_name. Available models: {models}'}), 400
-
-        img1_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img1.filename))
-        img2_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(img2.filename))
-
-        img1.save(img1_path)
-        img2.save(img2_path)
-
-        result = DeepFace.verify(
-            img1_path=img1_path,
-            img2_path=img2_path,
-            model_name=model_name
+        # Define paths to save the images
+        img1_path = os.path.join(
+            app.config["UPLOAD_FOLDER"], secure_filename(img1.filename)
+        )
+        img2_path = os.path.join(
+            app.config["UPLOAD_FOLDER"], secure_filename(img2.filename)
         )
 
-        # Optionally delete the uploaded files after processing
-        os.remove(img1_path)
-        os.remove(img2_path)
+        # Save the images
+        try:
+            img1.save(img1_path)
+            img2.save(img2_path)
+        except Exception as e:
+            return flask.jsonify({"error": f"Error saving images: {str(e)}"}), 500
+
+        # Verify the images using DeepFace
+        try:
+            result = verify_faces(image1=img1_path, image2=img2_path)
+        except Exception as e:
+            return (
+                flask.jsonify(
+                    {"error": f"Error processing images with DeepFace: {str(e)}"}
+                ),
+                500,
+            )
+        finally:
+            # Clean up: Delete the uploaded files after processing
+            try:
+                os.remove(img1_path)
+                os.remove(img2_path)
+            except Exception as e:
+                # Log error but do not fail the request due to cleanup issues
+                print(f"Error deleting files: {str(e)}")
 
         return flask.jsonify(result)
+
     except Exception as e:
-        return flask.jsonify({'error': str(e)}), 500
+        return flask.jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
+
+if __name__ == "__main__":
+    make_dir(UPLOAD_FOLDER)
+    app.run(host="0.0.0.0", port="5056", debug=True)
