@@ -11,8 +11,11 @@ FACE_MODEL = [
     "GhostFaceNet",
 ]
 
-SELECTED_MODEL_KEY = 1
+MATRICES = ["cosine", "euclidean", "euclidean_l2"]
+
+SELECTED_MODEL_KEY = 2
 
 UPLOAD_FOLDER = "static/uploads"
+REFERENCE_FOLDER = "data/reference_images"
 
 ALLOWED_FILE_EXTENSIONS = {"jpg", "jpeg", "png"}
