@@ -2,7 +2,7 @@ import flask
 import os
 from werkzeug.utils import secure_filename
 from faceMatch.pipeline.verify_face import verify_faces
-from faceMatch.utils import make_dir, save_reference_image, get_reference_image_path, list_reference_images
+from faceMatch.utils import make_dir, save_reference_image, get_reference_image_path, list_reference_images, delete_reference_image
 from faceMatch.constant import UPLOAD_FOLDER, REFERENCE_FOLDER
 
 app = flask.Flask(__name__)
@@ -113,6 +113,14 @@ def upload_reference():
         # Save the reference image
         try:
             reference_path = save_reference_image(image, key)
+
+            # Check if a face was detected in the image
+            if reference_path is None:
+                return flask.jsonify({
+                    "success": False,
+                    "error": "No face detected in the image. Please upload an image with a clear face."
+                }), 400
+
             return flask.jsonify({
                 "success": True,
                 "message": f"Reference image saved with key: {key}",
@@ -226,11 +234,61 @@ def list_references():
             "count": len(references),
             "references": [{
                 "key": ref["key"],
-                "filename": os.path.basename(ref["path"])
+                "filename": os.path.basename(ref["path"]),
+                "image_url": f"/reference_image/{ref['key']}"
             } for ref in references]
         })
     except Exception as e:
         return flask.jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
+
+@app.route("/reference_image/<key>", methods=["GET"])
+def get_reference_image(key):
+    """Serve a reference image by its key."""
+    try:
+        # Get the reference image path
+        reference_path = get_reference_image_path(key)
+        if not reference_path:
+            return flask.jsonify({"error": f"No reference image found with key: {key}"}), 404
+
+        # Get the directory containing the image
+        directory = os.path.dirname(reference_path)
+        filename = os.path.basename(reference_path)
+
+        # Return the image file
+        return flask.send_from_directory(directory, filename)
+    except Exception as e:
+        return flask.jsonify({"error": f"Error retrieving reference image: {str(e)}"}), 500
+
+
+@app.route("/delete_reference/<key>", methods=["DELETE"])
+def delete_reference(key):
+    """Delete a reference image by its key."""
+    try:
+        # Validate the key
+        if not key or not key.isalnum():
+            return flask.jsonify({"error": "Invalid reference key"}), 400
+
+        # Check if the reference exists
+        reference_path = get_reference_image_path(key)
+        if not reference_path:
+            return flask.jsonify({"error": f"No reference image found with key: {key}"}), 404
+
+        # Delete the reference image folder
+        success = delete_reference_image(key)
+
+        if success:
+            return flask.jsonify({
+                "success": True,
+                "message": f"Reference image with key '{key}' has been deleted"
+            })
+        else:
+            return flask.jsonify({
+                "error": f"Failed to delete reference image with key: {key}"
+            }), 500
+
+    except Exception as e:
+        return flask.jsonify({"error": f"Error deleting reference image: {str(e)}"}), 500
 
 
 if __name__ == "__main__":

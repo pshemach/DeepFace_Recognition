@@ -487,12 +487,12 @@
                     <h4>Result: <span>${verifiedText}</span></h4>
                     <p>Distance: ${
                       typeof distance === "number"
-                        ? distance.toFixed(4)
+                        ? distance.toFixed(2)
                         : distance
                     }</p>
                     <p>Threshold: ${
                       typeof threshold === "number"
-                        ? threshold.toFixed(4)
+                        ? threshold.toFixed(2)
                         : threshold
                     }</p>
                   </div>
@@ -586,19 +586,37 @@
           if (response.ok) {
             const data = await response.json();
             console.log("Received upload reference response:", data);
-            resultDiv.innerHTML = `<p style="color: green;">${data.message}</p>`;
 
-            // Reset the form
-            document.getElementById("uploadReferenceForm").reset();
-            document.getElementById("uploadRefPreviewSection").style.display =
-              "none";
+            if (data.success) {
+              resultDiv.innerHTML = `<p style="color: green;">${data.message}</p>`;
+
+              // Reset the form
+              document.getElementById("uploadReferenceForm").reset();
+              document.getElementById("uploadRefPreviewSection").style.display =
+                "none";
+            } else {
+              // This shouldn't happen with HTTP 200 response, but just in case
+              resultDiv.innerHTML = `<p style="color: red;">Error: ${
+                data.error || "Unknown error"
+              }</p>`;
+            }
           } else {
             console.error("Error response:", response.status);
             try {
               const error = await response.json();
-              resultDiv.innerHTML = `<p style="color: red;">Error: ${
-                error.error || "Unknown error"
-              }</p>`;
+
+              // Check if this is a face detection error (HTTP 400)
+              if (
+                response.status === 400 &&
+                error.error &&
+                error.error.includes("No face detected")
+              ) {
+                resultDiv.innerHTML = `<p style="color: orange;">Warning: ${error.error}</p>`;
+              } else {
+                resultDiv.innerHTML = `<p style="color: red;">Error: ${
+                  error.error || "Unknown error"
+                }</p>`;
+              }
             } catch (e) {
               resultDiv.innerHTML = `<p style="color: red;">Error: Server returned status ${response.status}</p>`;
             }
@@ -630,9 +648,17 @@
 
             data.references.forEach((ref) => {
               html += `
-                <div class="reference-item">
-                  <p>Key: ${ref.key}</p>
-                  <p>Filename: ${ref.filename}</p>
+                <div class="reference-item" data-key="${ref.key}">
+                  <div class="reference-image">
+                    <img src="${ref.image_url}" alt="Reference image ${ref.key}" />
+                  </div>
+                  <div class="reference-info">
+                    <p><strong>Key:</strong> ${ref.key}</p>
+                    <p><strong>Filename:</strong> ${ref.filename}</p>
+                  </div>
+                  <div class="reference-actions">
+                    <button class="delete-reference-btn" data-key="${ref.key}">Delete</button>
+                  </div>
                 </div>
               `;
             });
@@ -655,6 +681,46 @@
       document
         .getElementById("refreshReferenceList")
         .addEventListener("click", loadReferencesList);
+
+      // Function to handle reference deletion
+      async function deleteReference(key) {
+        if (
+          !confirm(
+            `Are you sure you want to delete reference with key: ${key}?`
+          )
+        ) {
+          return; // User cancelled
+        }
+
+        try {
+          const response = await fetch(`/delete_reference/${key}`, {
+            method: "DELETE",
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            alert(data.message || "Reference deleted successfully");
+            // Refresh the list
+            loadReferencesList();
+          } else {
+            const error = await response.json();
+            alert(`Error: ${error.error || "Failed to delete reference"}`);
+          }
+        } catch (e) {
+          console.error("Error deleting reference:", e);
+          alert(`Error: ${e.message || "An unexpected error occurred"}`);
+        }
+      }
+
+      // Event delegation for delete buttons
+      document.addEventListener("click", function (event) {
+        if (event.target.classList.contains("delete-reference-btn")) {
+          const key = event.target.getAttribute("data-key");
+          if (key) {
+            deleteReference(key);
+          }
+        }
+      });
     </script>
   </body>
 </html>
