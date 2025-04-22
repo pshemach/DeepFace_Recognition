@@ -36,7 +36,7 @@ DeepFace_Recognition/
 1. Clone the repository:
 
    ```
-   git clone https://github.com/yourusername/DeepFace_Recognition.git
+   git clone https://github.com/pshemach/DeepFace_Recognition.git
    cd DeepFace_Recognition
    ```
 
