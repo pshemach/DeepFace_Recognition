@@ -2,4 +2,5 @@ ipykernel
 deepface
 flask
 pyyaml
+tf-keras
 -e .
