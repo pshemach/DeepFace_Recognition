@@ -310,4 +310,4 @@ if __name__ == "__main__":
     # Just make sure it exists
     os.makedirs(REFERENCE_FOLDER, exist_ok=True)
 
-    app.run(host="0.0.0.0", port="5057", debug=True)
+    app.run(host="0.0.0.0", port="5072", debug=True)
