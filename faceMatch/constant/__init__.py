@@ -17,5 +17,6 @@ SELECTED_MODEL_KEY = 2
 
 UPLOAD_FOLDER = "static/uploads"
 REFERENCE_FOLDER = "data/reference_images"
+DATABASE_PATH = "data/face_embeddings.db"
 
 ALLOWED_FILE_EXTENSIONS = {"jpg", "jpeg", "png"}

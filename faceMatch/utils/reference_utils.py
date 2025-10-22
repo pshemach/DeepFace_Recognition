@@ -1,57 +1,29 @@
 import os
-import glob
-import tempfile
-from werkzeug.utils import secure_filename
-from faceMatch.constant import REFERENCE_FOLDER
+import sqlite3
+import numpy as np
 from deepface import DeepFace
+from werkzeug.utils import secure_filename
+from faceMatch.constant import REFERENCE_FOLDER, DATABASE_PATH
 
 def save_reference_image(image_file, key):
-    """Save a reference image with the given key.
+    """Save a reference image's face embedding with the given key in the database.
 
     Args:
         image_file: The uploaded image file object
-        key: The unique key to identify this reference image
+        key: The unique key to identify this reference embedding
 
     Returns:
-        The path to the saved reference image or None if no face detected
+        The key if embedding is saved successfully, None if no face detected
     """
-    print(f"Saving reference image with key: {key}")
+    print(f"Saving reference embedding with key: {key}")
     print(f"Image filename: {image_file.filename}")
 
-    # Ensure the main reference directory exists
-    os.makedirs(REFERENCE_FOLDER, exist_ok=True)
-    print(f"Reference folder: {REFERENCE_FOLDER}")
-
-    # Create or ensure key-specific folder exists
-    key_folder = os.path.join(REFERENCE_FOLDER, key)
-    os.makedirs(key_folder, exist_ok=True)
-    print(f"Key folder: {key_folder}")
-
-    # 🔥 Remove all existing files in the key folder
-    for fname in os.listdir(key_folder):
-        fpath = os.path.join(key_folder, fname)
-        try:
-            os.remove(fpath)
-            print(f"Deleted existing file: {fpath}")
-        except Exception as e:
-            print(f"Failed to delete file {fpath}: {str(e)}")
-
-    # Get sanitized file extension
-    filename = secure_filename(image_file.filename)
-    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'jpg'
-    print(f"File extension: {ext}")
-
-    # Define the final path
-    reference_filename = f"{key}.{ext}"
-    reference_path = os.path.join(key_folder, reference_filename)
-    print(f"Reference path: {reference_path}")
-
-    # Save temporarily to check for face
-    temp_path = os.path.join(tempfile.gettempdir(), reference_filename)
+    # Save temporarily to check for face and extract embedding
+    temp_path = os.path.join(tempfile.gettempdir(), secure_filename(image_file.filename))
     image_file.save(temp_path)
     print(f"Image saved temporarily at: {temp_path}")
 
-    # Face detection
+    # Face detection and embedding extraction
     try:
         face_objs = DeepFace.extract_faces(
             img_path=temp_path,
@@ -59,128 +31,117 @@ def save_reference_image(image_file, key):
             enforce_detection=True
         )
 
-        if face_objs:
-            print(f"Face detected. Confidence: {face_objs[0]['confidence']}")
-
-            # Save the final image
-            image_file.seek(0)
-            image_file.save(reference_path)
-            print(f"Image saved at: {reference_path}")
-
-            try:
-                os.remove(temp_path)
-            except Exception as e:
-                print(f"Error removing temp file: {e}")
-
-            return reference_path
-        else:
+        if not face_objs:
             print("No face detected.")
             os.remove(temp_path)
             return None
 
+        print(f"Face detected. Confidence: {face_objs[0]['confidence']}")
+
+        # Extract embedding
+        embedding = DeepFace.represent(
+            img_path=temp_path,
+            model_name=FACE_MODEL[SELECTED_MODEL_KEY],
+            enforce_detection=True
+        )[0]['embedding']
+        embedding_blob = np.array(embedding).tobytes()  # Convert to BLOB
+        filename = secure_filename(image_file.filename)
+
+        # Save embedding to database
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO face_embeddings (key, filename, embedding) VALUES (?, ?, ?)",
+            (key, filename, embedding_blob)
+        )
+        conn.commit()
+        conn.close()
+
+        print(f"Embedding saved for key: {key}")
+        os.remove(temp_path)
+        return key
+
     except Exception as e:
-        print(f"Error detecting face: {str(e)}")
+        print(f"Error processing image or saving embedding: {str(e)}")
         try:
             os.remove(temp_path)
         except Exception as e:
             print(f"Error removing temp file: {e}")
         return None
 
-
 def get_reference_image_path(key):
-    """Get the path to a reference image by its key.
+    """Get the embedding for a reference image by its key from the database.
 
     Args:
-        key: The unique key of the reference image
+        key: The unique key of the reference embedding
 
     Returns:
-        The path to the reference image or None if not found
+        The embedding as a numpy array or None if not found
     """
-    print(f"Looking for reference image with key: {key}")
-
-    # Check if the reference directory exists
-    if not os.path.exists(REFERENCE_FOLDER):
-        print(f"Reference folder does not exist: {REFERENCE_FOLDER}")
-        return None
-
-    # Check if the key folder exists
-    key_folder = os.path.join(REFERENCE_FOLDER, key)
-    print(f"Looking in key folder: {key_folder}")
-
-    if not os.path.exists(key_folder):
-        print(f"Key folder does not exist: {key_folder}")
-        return None
-
-    # Look for any file with the key as the filename (regardless of extension)
-    pattern = os.path.join(key_folder, f"{key}.*")
-    matching_files = glob.glob(pattern)
-    print(f"Found matching files: {matching_files}")
-
-    # Return the first matching file or None if no matches
-    result = matching_files[0] if matching_files else None
-    print(f"Returning reference path: {result}")
-    return result
-
-
-def list_reference_images():
-    """List all reference images with their keys.
-
-    Returns:
-        A list of dictionaries with keys and file paths
-    """
-    # Ensure the reference directory exists
-    if not os.path.exists(REFERENCE_FOLDER):
-        return []
-
-    # Get all subdirectories (key folders) in the reference directory
-    key_folders = [f for f in os.listdir(REFERENCE_FOLDER)
-                  if os.path.isdir(os.path.join(REFERENCE_FOLDER, f))]
-
-    # Extract keys and file paths
-    result = []
-    for key in key_folders:
-        key_folder = os.path.join(REFERENCE_FOLDER, key)
-        # Look for the image file with the key name
-        pattern = os.path.join(key_folder, f"{key}.*")
-        matching_files = glob.glob(pattern)
-
-        if matching_files:  # If we found a matching file
-            result.append({"key": key, "path": matching_files[0]})
-
-    return result
-
-
-def delete_reference_image(key):
-    """Delete a reference image folder with the given key.
-
-    Args:
-        key: The unique key identifying the reference image folder to delete
-
-    Returns:
-        bool: True if the folder was successfully deleted, False otherwise
-    """
-    print(f"Attempting to delete reference image with key: {key}")
-
-    # Check if the key folder exists
-    key_folder = os.path.join(REFERENCE_FOLDER, key)
-    print(f"Looking for key folder: {key_folder}")
-
-    if not os.path.exists(key_folder):
-        print(f"Key folder not found: {key_folder}")
-        return False
+    print(f"Looking for reference embedding with key: {key}")
 
     try:
-        # Delete all files in the folder
-        for filename in os.listdir(key_folder):
-            file_path = os.path.join(key_folder, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-                print(f"Deleted file: {file_path}")
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT embedding FROM face_embeddings WHERE key = ?", (key,))
+        result = cursor.fetchone()
+        conn.close()
 
-        # Remove the directory
-        os.rmdir(key_folder)
-        print(f"Successfully deleted reference folder: {key_folder}")
-        return True
+        if result:
+            embedding_blob = result[0]
+            embedding = np.frombuffer(embedding_blob, dtype=np.float64)
+            print(f"Embedding found for key: {key}")
+            return embedding
+        else:
+            print(f"No embedding found for key: {key}")
+            return None
     except Exception as e:
-        print(f"Error deleting reference folder: {str(e)}")
+        print(f"Error retrieving embedding: {str(e)}")
+        return None
+
+def list_reference_images():
+    """List all reference embeddings with their keys.
+
+    Returns:
+        A list of dictionaries with keys and filenames
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, filename FROM face_embeddings")
+        results = cursor.fetchall()
+        conn.close()
+
+        return [{"key": key, "filename": filename} for key, filename in results]
+    except Exception as e:
+        print(f"Error listing reference embeddings: {str(e)}")
+        return []
+
+def delete_reference_image(key):
+    """Delete a reference embedding with the given key from the database.
+
+    Args:
+        key: The unique key identifying the reference embedding to delete
+
+    Returns:
+        bool: True if the embedding was successfully deleted, False otherwise
+    """
+    print(f"Attempting to delete reference embedding with key: {key}")
+
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM face_embeddings WHERE key = ?", (key,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if deleted:
+            print(f"Successfully deleted reference embedding for key: {key}")
+            return True
+        else:
+            print(f"No embedding found for key: {key}")
+            return False
+    except Exception as e:
+        print(f"Error deleting reference embedding: {str(e)}")
         return False

@@ -1,90 +1,183 @@
-# DeepFace Recognition System
+Face Recognition API Documentation
+Overview
+The Face Recognition API provides endpoints for managing and comparing face embeddings to perform facial recognition. It allows clients to upload reference images, store their face embeddings and images, compare new images against stored references, list all stored references, and delete references. The API uses the Facenet512 model with cosine distance for face verification, ensuring accurate and efficient face matching.
+Base URL: http://<host>:5056 (replace <host> with the production server address)
+Authentication: None (add JWT or API key authentication in production if required).
+Supported File Formats: JPEG, PNG
+Endpoints
 
-A facial recognition system built using DeepFace that allows for direct face comparison and reference-based face verification.
+1. Upload Reference Image
+   Uploads an image, extracts its face embedding, and stores both the embedding and image in the database with a unique key.
 
-## Features
+Method: POST
+Path: /upload_reference
+Content-Type: multipart/form-data
+Request Body:
+image (file, required): The image file containing a single face (JPEG or PNG).
 
-- **Direct Face Comparison**: Compare two uploaded images to determine if they contain the same person.
-- **Reference-Based Comparison**: Compare an uploaded image against a stored reference image.
-- **Reference Management**: Upload, list, and delete reference images.
-- **Face Detection Validation**: Ensures that reference images contain detectable faces.
-- **Multiple Face Recognition Models**: Supports various models including VGG-Face, Facenet, Facenet512, and more.
-- **Flexible Distance Metrics**: Supports cosine, euclidean, and euclidean_l2 distance metrics.
+Response:
+Status: 200 OK
+Body:{
+"success": boolean,
+"message": string,
+"key": string
+}
 
-## Project Structure
+success: Indicates if the upload was successful.
+message: Descriptive message (e.g., "Reference embedding saved with key: ").
+key: Unique alphanumeric identifier for the stored embedding and image.
 
-```
-DeepFace_Recognition/
-├── data/
-│   └── reference_images/  # Stores reference images in folders by key
-├── faceMatch/
-│   ├── constant/         # Constants and configuration
-│   ├── pipeline/         # Face verification pipeline
-│   └── utils/            # Utility functions
-│       ├── file_utils.py    # File handling utilities
-│       ├── image_utils.py   # Image processing utilities
-│       └── reference_utils.py # Reference image management
-├── static/              # Static files for the web interface
-├── templates/           # HTML templates
-├── app.py              # Main application
-├── demo.py             # Demo application
-└── requirements.txt    # Project dependencies
-```
+Error Responses:
+400 Bad Request: Invalid file extension or no face detected.{
+"detail": "Invalid file extension"
+}
 
-## Installation
+or{
+"detail": "No face detected in the image. Please upload an image with a clear face."
+}
 
-1. Clone the repository:
+500 Internal Server Error: Processing or database error.{
+"detail": "Error processing image: <error message>"
+}
 
-   ```
-   git clone https://github.com/pshemach/DeepFace_Recognition.git
-   cd DeepFace_Recognition
-   ```
+Example:curl -X POST -F "image=@/path/to/image.jpg" http://localhost:5056/upload_reference
 
-2. Create a virtual environment and activate it:
+Response:{
+"success": true,
+"message": "Reference embedding saved with key: 80a728a38eb649bdbf91a1c890bbb659",
+"key": "80a728a38eb649bdbf91a1c890bbb659"
+}
 
-   ```
-   python -m venv face_venv
-   source face_venv/bin/activate  # On Windows: face_venv\Scripts\activate
-   ```
+2. Compare with Reference
+   Compares an uploaded image with a stored reference image identified by a key, using DeepFace's verification to determine if the faces match.
 
-3. Install the required packages:
-   ```
-   pip install -r requirements.txt
-   ```
+Method: POST
+Path: /compare_with_reference
+Content-Type: multipart/form-data
+Request Body:
+image (file, required): The image file to compare (JPEG or PNG).
+reference_key (string, required): The unique key of the stored reference image.
 
-## Usage
+Response:
+Status: 200 OK
+Body:{
+"reference_key": string,
+"result": {
+"verified": boolean,
+"distance": number,
+"threshold": number
+}
+}
 
-1. Start the application:
+reference_key: The provided key for the reference image.
+result.verified: Whether the faces match (true if distance ≤ threshold).
+result.distance: The computed distance between face embeddings (lower is more similar).
+result.threshold: The threshold used for verification (0.4 for Facenet512 with cosine distance).
 
-   ```
-   python app.py
-   ```
+Error Responses:
+400 Bad Request: Invalid file extension or invalid reference key format.{
+"detail": "Invalid file extension"
+}
 
-2. Open your web browser and navigate to:
+or{
+"detail": "Reference key must be alphanumeric"
+}
 
-   ```
-   http://localhost:5056
-   ```
+404 Not Found: Reference key not found.{
+"detail": "No reference image found with key: <reference_key>"
+}
 
-3. Use the web interface to:
-   - Compare two faces directly
-   - Upload reference images with unique keys
-   - Compare uploaded images with stored references
-   - View and manage reference images
+500 Internal Server Error: Processing or DeepFace error.{
+"detail": "Error processing image: <error message>"
+}
 
-## API Endpoints
+Example:curl -X POST -F "image=@/path/to/image.jpg" -F "reference_key=80a728a38eb649bdbf91a1c890bbb659" http://localhost:5056/compare_with_reference
 
-- `POST /compare_faces`: Compare two uploaded images
-- `POST /upload_reference`: Upload a reference image with a key
-- `POST /compare_with_reference`: Compare an uploaded image with a stored reference
-- `GET /list_references`: List all stored reference images
-- `GET /reference_image/<key>`: Get a specific reference image
-- `DELETE /delete_reference/<key>`: Delete a reference image
+Response:{
+"reference_key": "80a728a38eb649bdbf91a1c890bbb659",
+"result": {
+"verified": true,
+"distance": 0.0,
+"threshold": 0.4
+}
+}
 
-## Reference Image Management
+3. List References
+   Lists all stored reference images with their keys and filenames.
 
-Reference images are stored in the `data/reference_images` directory, organized in folders by their unique keys. Each reference image is validated to ensure it contains a detectable face before being stored.
+Method: GET
+Path: /list_references
+Request Parameters: None
+Response:
+Status: 200 OK
+Body:{
+"count": integer,
+"references": [
+{
+"key": string,
+"filename": string
+}
+]
+}
 
-## License
+count: Number of stored references.
+references: Array of objects containing the key and original filename for each reference.
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Error Responses:
+500 Internal Server Error: Database error.{
+"detail": "Error listing embeddings: <error message>"
+}
+
+Example:curl -X GET http://localhost:5056/list_references
+
+Response:{
+"count": 2,
+"references": [
+{
+"key": "80a728a38eb649bdbf91a1c890bbb659",
+"filename": "image1.jpg"
+},
+{
+"key": "456e7890e12b34c5a678426614174001",
+"filename": "image2.png"
+}
+]
+}
+
+4. Delete Reference
+   Deletes a stored reference image and its embedding by its key.
+
+Method: DELETE
+Path: /delete_reference/{key}
+Path Parameters:
+key (string, required): The unique key of the reference to delete.
+
+Response:
+Status: 200 OK
+Body:{
+"success": boolean,
+"message": string
+}
+
+success: Indicates if the deletion was successful.
+message: Descriptive message (e.g., "Reference embedding with key '' has been deleted").
+
+Error Responses:
+400 Bad Request: Invalid key format.{
+"detail": "Invalid reference key"
+}
+
+404 Not Found: Reference key not found.{
+"detail": "No reference embedding found with key: <key>"
+}
+
+500 Internal Server Error: Database error.{
+"detail": "Error deleting embedding: <error message>"
+}
+
+Example:curl -X DELETE http://localhost:5056/delete_reference/80a728a38eb649bdbf91a1c890bbb659
+
+Response:{
+"success": true,
+"message": "Reference embedding with key '80a728a38eb649bdbf91a1c890bbb659' has been deleted"
+}
