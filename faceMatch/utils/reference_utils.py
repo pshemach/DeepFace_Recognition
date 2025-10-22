@@ -3,7 +3,7 @@ import glob
 import tempfile
 from werkzeug.utils import secure_filename
 from faceMatch.constant import REFERENCE_FOLDER
-
+from deepface import DeepFace
 
 def save_reference_image(image_file, key):
     """Save a reference image with the given key.
@@ -22,68 +22,68 @@ def save_reference_image(image_file, key):
     os.makedirs(REFERENCE_FOLDER, exist_ok=True)
     print(f"Reference folder: {REFERENCE_FOLDER}")
 
-    # Create a directory for this specific key
+    # Create or ensure key-specific folder exists
     key_folder = os.path.join(REFERENCE_FOLDER, key)
     os.makedirs(key_folder, exist_ok=True)
     print(f"Key folder: {key_folder}")
 
-    # Get file extension from the original filename
+    # 🔥 Remove all existing files in the key folder
+    for fname in os.listdir(key_folder):
+        fpath = os.path.join(key_folder, fname)
+        try:
+            os.remove(fpath)
+            print(f"Deleted existing file: {fpath}")
+        except Exception as e:
+            print(f"Failed to delete file {fpath}: {str(e)}")
+
+    # Get sanitized file extension
     filename = secure_filename(image_file.filename)
     ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'jpg'
     print(f"File extension: {ext}")
 
-    # Create a filename using the key
+    # Define the final path
     reference_filename = f"{key}.{ext}"
     reference_path = os.path.join(key_folder, reference_filename)
     print(f"Reference path: {reference_path}")
 
-    # Save the image temporarily to check for faces
+    # Save temporarily to check for face
     temp_path = os.path.join(tempfile.gettempdir(), reference_filename)
     image_file.save(temp_path)
     print(f"Image saved temporarily at: {temp_path}")
 
-    # Check if a face can be detected in the image
+    # Face detection
     try:
-        from deepface import DeepFace
-        # Try to extract faces from the image
         face_objs = DeepFace.extract_faces(
             img_path=temp_path,
-            detector_backend='opencv',  # Using opencv as it's faster
-            enforce_detection=True  # Enforce face detection
+            detector_backend='opencv',
+            enforce_detection=True
         )
 
-        # If we get here, at least one face was detected
-        if len(face_objs) > 0:
-            print(f"Face detected in the image. Confidence: {face_objs[0]['confidence']}")
+        if face_objs:
+            print(f"Face detected. Confidence: {face_objs[0]['confidence']}")
 
-            # Now save the image to the reference folder
-            # We need to reopen the file since we've already read it
+            # Save the final image
             image_file.seek(0)
             image_file.save(reference_path)
             print(f"Image saved at: {reference_path}")
 
-            # Clean up the temporary file
             try:
                 os.remove(temp_path)
             except Exception as e:
-                print(f"Error removing temporary file: {str(e)}")
+                print(f"Error removing temp file: {e}")
 
             return reference_path
         else:
-            print("No face detected in the image.")
-            # Clean up the temporary file
-            try:
-                os.remove(temp_path)
-            except Exception as e:
-                print(f"Error removing temporary file: {str(e)}")
+            print("No face detected.")
+            os.remove(temp_path)
             return None
+
     except Exception as e:
         print(f"Error detecting face: {str(e)}")
-        # Clean up the temporary file
         try:
             os.remove(temp_path)
         except Exception as e:
-            print(f"Error removing temporary file: {str(e)}")
+            print(f"Error removing temp file: {e}")
         return None
 
 

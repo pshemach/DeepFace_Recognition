@@ -9,6 +9,8 @@ from faceMatch.utils.file_utils import (
 )
 
 from faceMatch.utils.image_utils import (
+    get_safe_filename,
+    save_image,
     load_image,
     load_config
 )
@@ -28,6 +30,8 @@ __all__ = [
     'make_temp_folder',
     'unique_filenameuni',
     'create_temp_directory_with_age_limit',
+    'get_safe_filename',
+    'save_image',
     'load_image',
     'load_config',
     'save_reference_image',

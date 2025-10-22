@@ -1,8 +1,7 @@
 import flask
 import os
-from werkzeug.utils import secure_filename
 from faceMatch.pipeline.verify_face import verify_faces
-from faceMatch.utils import make_dir, save_reference_image, get_reference_image_path, list_reference_images, delete_reference_image
+from faceMatch.utils import make_dir, save_reference_image, get_reference_image_path, list_reference_images, delete_reference_image,save_image, get_safe_filename
 from faceMatch.constant import UPLOAD_FOLDER, REFERENCE_FOLDER
 
 app = flask.Flask(__name__)
@@ -29,21 +28,29 @@ def compare_faces():
 
         img1 = flask.request.files["img1_path"]
         img2 = flask.request.files["img2_path"]
+        
+        img1_name = get_safe_filename(img1.filename)
+        img2_name = get_safe_filename(img2.filename)
 
         # Define paths to save the images
         img1_path = os.path.join(
-            app.config["UPLOAD_FOLDER"], secure_filename(img1.filename)
+            app.config["UPLOAD_FOLDER"], img1_name
         )
         img2_path = os.path.join(
-            app.config["UPLOAD_FOLDER"], secure_filename(img2.filename)
+            app.config["UPLOAD_FOLDER"], img2_name
         )
 
         # Save the images
-        try:
-            img1.save(img1_path)
-            img2.save(img2_path)
-        except Exception as e:
-            return flask.jsonify({"error": f"Error saving images: {str(e)}"}), 500
+        success1, error1 = save_image(img1, img1_path)
+        success2, error2 = save_image(img2, img2_path)
+        
+        if not success1:
+            print(f"Failed to save img1: {error1}")
+            return flask.jsonify({"error": f"Failed to save img1: {error1}"}), 400
+        if not success2:
+            print(f"Failed to save img2: {error2}")
+            return flask.jsonify({"error": f"Failed to save img1: {error2}"}), 400
+    
 
         # Verify the images using DeepFace
         try:
@@ -162,16 +169,17 @@ def compare_with_reference():
         reference_path = get_reference_image_path(reference_key)
         if not reference_path:
             return flask.jsonify({"error": f"No reference image found with key: {reference_key}"}), 404
-
+        
+        image_name = get_safe_filename(image.filename)
         # Save the uploaded image temporarily
         img_path = os.path.join(
-            app.config["UPLOAD_FOLDER"], secure_filename(image.filename)
+            app.config["UPLOAD_FOLDER"], image_name
         )
-
-        try:
-            image.save(img_path)
-        except Exception as e:
-            return flask.jsonify({"error": f"Error saving image: {str(e)}"}), 500
+        success, error = save_image(image, img_path)
+        
+        if not success:
+            print(f"Failed to save img1: {error}")
+            return flask.jsonify({"error": f"Failed to save img1: {error}"}), 400
 
         # Verify the images using DeepFace
         try:
