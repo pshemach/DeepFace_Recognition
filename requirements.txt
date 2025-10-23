@@ -6,4 +6,5 @@ pyyaml
 tf-keras
 from_root
 scikit-learn
+pydantic
 -e .
