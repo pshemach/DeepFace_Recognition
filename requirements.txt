@@ -4,4 +4,5 @@ fastapi
 uvicorn
 pyyaml
 tf-keras
+from_root
 -e .
