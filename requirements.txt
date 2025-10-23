@@ -5,4 +5,5 @@ uvicorn
 pyyaml
 tf-keras
 from_root
+scikit-learn
 -e .
