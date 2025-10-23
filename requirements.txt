@@ -1,6 +1,7 @@
 ipykernel
 deepface
-flask
+fastapi
+uvicorn
 pyyaml
 tf-keras
 -e .
