@@ -7,4 +7,5 @@ tf-keras
 from_root
 scikit-learn
 pydantic
+python-multipart
 -e .
