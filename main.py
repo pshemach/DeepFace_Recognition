@@ -1,23 +1,18 @@
 import os
-import uuid
-import sqlite3
 import numpy as np
 import logging
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+import json
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from werkzeug.utils import secure_filename
 from deepface import DeepFace
-from PIL import Image
-import io
 import tempfile
-import glob
-from typing import List
+from typing import List, Any
+# Configure logging
 from faceMatch.constant import (
-    UPLOAD_FOLDER, REFERENCE_FOLDER, DATABASE_PATH,
-    FACE_MODEL, SELECTED_MODEL_KEY, MATRICES, ALLOWED_FILE_EXTENSIONS
+    UPLOAD_FOLDER, FACE_MODEL, SELECTED_MODEL_KEY, MATRICES, ALLOWED_FILE_EXTENSIONS
 )
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -36,24 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database initialization
-def init_db():
-    """Initialize the SQLite database and create the embeddings table."""
-    os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS face_embeddings (
-            key TEXT PRIMARY_KEY,
-            filename TEXT,
-            embedding BLOB,
-            image BLOB
-        )
-    """)
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized at %s", DATABASE_PATH)
-
 # Utility Functions
 ALLOWED_EXTENSIONS = {ext.lower() for ext in ALLOWED_FILE_EXTENSIONS}
 
@@ -61,49 +38,60 @@ def is_allowed(filename: str) -> bool:
     """Check if the file has an allowed extension."""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def verify_faces(image1, image2):
+def verify_faces(image_path: str, reference_embedding: List[float]):
+    """Compare an image with a reference embedding."""
     try:
-        # Print detailed information about the input images
-        logger.info("Verifying faces with DeepFace:")
-        logger.info("Image 1 path: %s", image1)
-        logger.info("Image 2 path: %s", image2)
+        logger.info("Verifying face with DeepFace:")
+        logger.info("Image path: %s", image_path)
         logger.info("Model: %s", FACE_MODEL[SELECTED_MODEL_KEY])
         logger.info("Distance metric: %s", MATRICES[2])
 
-        # Check if the image files exist
-        if not os.path.exists(image1):
-            return {"error": f"Reference image file not found: {image1}"}
-        if not os.path.exists(image2):
-            return {"error": f"Comparison image file not found: {image2}"}
+        # Check if the image file exists
+        if not os.path.exists(image_path):
+            return {"error": f"Comparison image file not found: {image_path}"}
 
-        # Try to open the images to verify they are valid
+        # Validate image
         try:
             from PIL import Image
-            img1 = Image.open(image1)
-            img1.verify()  # Verify that it's a valid image
-            logger.info("Image 1 is valid")
-
-            img2 = Image.open(image2)
-            img2.verify()  # Verify that it's a valid image
-            logger.info("Image 2 is valid")
+            img = Image.open(image_path)
+            img.verify()  # Verify it's a valid image
+            logger.info("Image is valid")
         except Exception as img_error:
             logger.error("Invalid image file: %s", str(img_error))
             return {"error": f"Invalid image file: {str(img_error)}"}
 
-        # Call DeepFace.verify to get the full result dictionary
-        # Set enforce_detection=False to handle images where faces can't be detected
-        result = DeepFace.verify(
-            image1, image2,
+        # Extract embedding for uploaded image
+        uploaded_embedding = DeepFace.represent(
+            img_path=image_path,
             model_name=FACE_MODEL[SELECTED_MODEL_KEY],
-            distance_metric=MATRICES[2],
             enforce_detection=False  # Don't enforce face detection
-        )
+        )[0]['embedding']
+        uploaded_embedding = np.array(uploaded_embedding)
 
-        # Print the result for debugging
-        logger.info("DeepFace verification result: %s", result)
+        # Convert reference embedding to numpy array
+        reference_embedding = np.array(reference_embedding)
 
-        # Convert NumPy boolean to Python bool
-        result["verified"] = bool(result["verified"])
+        # Compute distance
+        if MATRICES[2] == "cosine":
+            distance = np.dot(reference_embedding, uploaded_embedding) / (
+                np.linalg.norm(reference_embedding) * np.linalg.norm(uploaded_embedding)
+            )
+            distance = 1 - distance  # Convert similarity to distance
+        elif MATRICES[2] == "euclidean":
+            distance = np.linalg.norm(reference_embedding - uploaded_embedding)
+        elif MATRICES[2] == "euclidean_l2":
+            distance = np.sqrt(np.sum((reference_embedding - uploaded_embedding) ** 2))
+
+        # Threshold (adjust based on model and metric)
+        threshold = 0.4  # Example for Facenet512 with cosine
+        verified = bool(distance <= threshold)  # Convert to Python bool
+
+        result = {
+            "verified": verified,
+            "distance": round(float(distance), 2),  # Convert to Python float
+            "threshold": round(float(threshold), 2)  # Convert to Python float
+        }
+        logger.info("Verification result: %s", result)
         return result
     except Exception as e:
         import traceback
@@ -112,43 +100,31 @@ def verify_faces(image1, image2):
         logger.error("Traceback: %s", error_traceback)
         return {"error": f"DeepFace error: {str(e)}"}
 
-async def save_reference_image(image_file: UploadFile, key: str) -> str:
-    """Save a reference image's face embedding and image data with the given key in the database.
+# Pydantic Models
+class ReferenceResponse(BaseModel):
+    embedding: List[float]
 
-    Args:
-        image_file: The uploaded image file object
-        key: The unique key to identify this reference embedding
+class CompareResponse(BaseModel):
+    result: dict
 
-    Returns:
-        The key if embedding and image are saved successfully, None if no face detected
-    """
-    logger.info("Saving reference embedding with key: %s, filename: %s", key, image_file.filename)
+# Endpoints
+
+@app.post("/upload_reference", response_model=ReferenceResponse)
+async def upload_reference(image: UploadFile = File(...)):
+    """Upload a reference image and return its face embedding."""
+    logger.info("Received upload request for image: %s", image.filename)
     
-    if not is_allowed(image_file.filename):
-        logger.error("Invalid file extension for %s", image_file.filename)
+    if not is_allowed(image.filename):
+        logger.error("Invalid file extension for %s", image.filename)
         raise HTTPException(status_code=400, detail="Invalid file extension")
 
-    # Save temporarily to check for face and extract embedding
-    temp_path = os.path.join(tempfile.gettempdir(), secure_filename(image_file.filename))
+    # Save image temporarily
+    temp_path = os.path.join(tempfile.gettempdir(), secure_filename(image.filename))
     try:
-        content = await image_file.read()
+        content = await image.read()
         with open(temp_path, "wb") as f:
             f.write(content)
         logger.info("Image saved temporarily at: %s", temp_path)
-
-        # Face detection and embedding extraction
-        face_objs = DeepFace.extract_faces(
-            img_path=temp_path,
-            detector_backend='opencv',
-            enforce_detection=True
-        )
-
-        if not face_objs:
-            logger.warning("No face detected in image: %s", image_file.filename)
-            os.remove(temp_path)
-            return None
-
-        logger.info("Face detected. Confidence: %s", face_objs[0]['confidence'])
 
         # Extract embedding
         embedding = DeepFace.represent(
@@ -156,25 +132,11 @@ async def save_reference_image(image_file: UploadFile, key: str) -> str:
             model_name=FACE_MODEL[SELECTED_MODEL_KEY],
             enforce_detection=True
         )[0]['embedding']
-        embedding_blob = np.array(embedding).tobytes()  # Convert to BLOB
-        filename = secure_filename(image_file.filename)
+        logger.info("Embedding extracted for image: %s", image.filename)
 
-        # Save embedding and image to database
-        conn = sqlite3.connect(DATABASE_PATH)
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT OR REPLACE INTO face_embeddings (key, filename, embedding, image) VALUES (?, ?, ?, ?)",
-                (key, filename, embedding_blob, content)
-            )
-            conn.commit()
-            logger.info("Embedding and image saved for key: %s", key)
-        finally:
-            conn.close()
-
-        return key
+        return ReferenceResponse(embedding=embedding)
     except Exception as e:
-        logger.error("Error processing image or saving embedding: %s", str(e))
+        logger.error("Error processing image: %s", str(e))
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
     finally:
         try:
@@ -184,167 +146,50 @@ async def save_reference_image(image_file: UploadFile, key: str) -> str:
         except Exception as e:
             logger.warning("Error removing temp file: %s", str(e))
 
-def get_reference_image_path(key: str) -> str:
-    """Get the reference image path by saving it temporarily from the database.
-
-    Args:
-        key: The unique key of the reference embedding
-
-    Returns:
-        The temporary path to the reference image or None if not found
-    """
-    logger.info("Looking for reference image with key: %s", key)
-
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT image, filename FROM face_embeddings WHERE key = ?", (key,))
-            result = cursor.fetchone()
-            if result:
-                image_blob, filename = result
-                # Save image to temporary file
-                temp_path = os.path.join(tempfile.gettempdir(), secure_filename(filename))
-                with open(temp_path, "wb") as f:
-                    f.write(image_blob)
-                logger.info("Reference image saved temporarily at: %s", temp_path)
-                return temp_path
-            else:
-                logger.warning("No reference image found for key: %s", key)
-                return None
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.error("Error retrieving reference image: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Error retrieving reference image: {str(e)}")
-
-def list_reference_images() -> List[dict]:
-    """List all reference embeddings with their keys.
-
-    Returns:
-        A list of dictionaries with keys and filenames
-    """
-    logger.info("Listing all reference embeddings")
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT key, filename FROM face_embeddings")
-            results = cursor.fetchall()
-            return [{"key": key, "filename": filename} for key, filename in results]
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.error("Error listing reference embeddings: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Error listing embeddings: {str(e)}")
-
-def delete_reference_image(key: str) -> bool:
-    """Delete a reference embedding and image with the given key from the database.
-
-    Args:
-        key: The unique key identifying the reference embedding to delete
-
-    Returns:
-        bool: True if the embedding was successfully deleted, False otherwise
-    """
-    logger.info("Attempting to delete reference embedding with key: %s", key)
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM face_embeddings WHERE key = ?", (key,))
-            deleted = cursor.rowcount > 0
-            conn.commit()
-            if deleted:
-                logger.info("Successfully deleted reference embedding for key: %s", key)
-                return True
-            else:
-                logger.warning("No embedding found for key: %s", key)
-                return False
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.error("Error deleting reference embedding: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Error deleting embedding: {str(e)}")
-
-# Pydantic Models for Request/Response Validation
-class ReferenceResponse(BaseModel):
-    success: bool
-    message: str
-    key: str
-
-class CompareResponse(BaseModel):
-    reference_key: str
-    result: dict
-
-class ReferenceListResponse(BaseModel):
-    count: int
-    references: List[dict]
-
-class DeleteResponse(BaseModel):
-    success: bool
-    message: str
-
-# Database Dependency
-def get_db():
-    conn = sqlite3.connect(DATABASE_PATH)
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-# Endpoints
-@app.post("/upload_reference", response_model=ReferenceResponse)
-async def upload_reference(image: UploadFile = File(...)):
-    """Upload a reference image and store its face embedding and image data."""
-    logger.info("Received upload request for image: %s", image.filename)
-    
-    if not is_allowed(image.filename):
-        logger.error("Invalid file extension for %s", image.filename)
-        raise HTTPException(status_code=400, detail="Invalid file extension")
-
-    # Generate a unique key
-    key = str(uuid.uuid4()).replace('-', '')
-    
-    # Save the reference embedding and image
-    result = await save_reference_image(image, key)
-    
-    if result is None:
-        logger.warning("No face detected in uploaded image")
-        raise HTTPException(
-            status_code=400,
-            detail="No face detected in the image. Please upload an image with a clear face."
-        )
-    
-    return ReferenceResponse(
-        success=True,
-        message=f"Reference embedding saved with key: {key}",
-        key=key
-    )
-
 @app.post("/compare_with_reference", response_model=CompareResponse)
 async def compare_with_reference(
     image: UploadFile = File(...),
-    reference_key: str = Form(...)
+    embedding: str = Form(...)
 ):
-    """Compare an uploaded image with a stored reference image using verify_faces."""
-    logger.info("Received compare request with reference_key: %s, image: %s", reference_key, image.filename)
-    
-    # Validate input
+    """Compare an uploaded image with a provided reference embedding."""
+    logger.info("Received compare request for image: %s", image.filename)
+
     if not is_allowed(image.filename):
         logger.error("Invalid file extension for %s", image.filename)
         raise HTTPException(status_code=400, detail="Invalid file extension")
     
-    if not reference_key.isalnum():
-        logger.error("Invalid reference key format: %s", reference_key)
-        raise HTTPException(status_code=400, detail="Reference key must be alphanumeric")
-    
-    # Get reference image path
-    reference_image_path = get_reference_image_path(reference_key)
-    if reference_image_path is None:
-        logger.warning("No reference image found for key: %s", reference_key)
-        raise HTTPException(status_code=404, detail=f"No reference image found with key: {reference_key}")
-    
+    # Parse the embedding from JSON string
+    try:
+        # Try to parse as JSON object with "embedding" key
+        embedding_data = json.loads(embedding)
+        
+        # Check if it's wrapped in {"embedding": [...]} format
+        if isinstance(embedding_data, dict) and "embedding" in embedding_data:
+            reference_embedding_list = embedding_data["embedding"]
+        # Or if it's directly a list
+        elif isinstance(embedding_data, list):
+            reference_embedding_list = embedding_data
+        else:
+            raise HTTPException(status_code=400, detail="Invalid embedding format")
+        
+        # Validate it's a list of numbers
+        if not isinstance(reference_embedding_list, list):
+            raise HTTPException(status_code=400, detail="Embedding must be a list")
+        
+        if not all(isinstance(x, (int, float)) for x in reference_embedding_list):
+            raise HTTPException(status_code=400, detail="Embedding must contain only numbers")
+            
+        logger.info("Parsed embedding with %d dimensions", len(reference_embedding_list))
+        
+    except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in embedding parameter: %s", str(e))
+        raise HTTPException(status_code=400, detail=f"Invalid JSON format for embedding: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error parsing embedding: %s", str(e))
+        raise HTTPException(status_code=400, detail=f"Error parsing embedding: {str(e)}")
+
     # Save uploaded image temporarily
     temp_path = os.path.join(UPLOAD_FOLDER, secure_filename(image.filename))
     try:
@@ -354,75 +199,33 @@ async def compare_with_reference(
             f.write(content)
         logger.info("Image saved temporarily at: %s", temp_path)
         
-        # Compare using verify_faces
-        result = verify_faces(reference_image_path, temp_path)
+        # Compare using verify_faces - pass the list directly
+        result = verify_faces(temp_path, reference_embedding_list)
         
-        # Check for errors in result
         if isinstance(result, dict) and 'error' in result:
             logger.error("Error in verify_faces: %s", result['error'])
             raise HTTPException(status_code=500, detail=result['error'])
         
-        # Ensure verified is a Python bool
-        result["verified"] = bool(result["verified"])
-        result["distance"] = round(float(result["distance"]), 2)
-        result["threshold"] = round(float(result["threshold"]), 2)
+        return CompareResponse(result=result)
         
-        logger.info("Comparison result: %s", result)
-        
-        return CompareResponse(
-            reference_key=reference_key,
-            result=result
-        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error processing image with DeepFace: %s", str(e))
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
     finally:
-        # Clean up temporary files
         try:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
                 logger.info("Temporary file deleted: %s", temp_path)
-            if os.path.exists(reference_image_path):
-                os.remove(reference_image_path)
-                logger.info("Reference image file deleted: %s", reference_image_path)
         except Exception as e:
             logger.warning("Error deleting temporary file: %s", str(e))
 
-@app.get("/list_references", response_model=ReferenceListResponse)
-async def list_references():
-    """List all stored reference embeddings."""
-    logger.info("Listing references")
-    references = list_reference_images()
-    return ReferenceListResponse(
-        count=len(references),
-        references=[{"key": ref["key"], "filename": ref["filename"]} for ref in references]
-    )
-
-@app.delete("/delete_reference/{key}", response_model=DeleteResponse)
-async def delete_reference(key: str):
-    """Delete a reference embedding and image by its key."""
-    logger.info("Received delete request for key: %s", key)
-    
-    if not key.isalnum():
-        logger.error("Invalid reference key format: %s", key)
-        raise HTTPException(status_code=400, detail="Invalid reference key")
-    
-    success = delete_reference_image(key)
-    if success:
-        return DeleteResponse(
-            success=True,
-            message=f"Reference embedding with key '{key}' has been deleted"
-        )
-    else:
-        logger.warning("No reference embedding found for key: %s", key)
-        raise HTTPException(status_code=404, detail=f"No reference embedding found with key: {key}")
-
-# Initialize database on startup
+# Initialize upload folder on startup
 @app.on_event("startup")
 async def startup_event():
-    init_db()
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    logger.info("Application started, database and upload folder initialized")
+    logger.info("Application started, upload folder initialized")
 
 if __name__ == "__main__":
     import uvicorn
