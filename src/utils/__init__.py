@@ -1,5 +1,5 @@
 # Import from modular files
-from faceMatch.utils.file_utils import (
+from src.utils.file_utils import (
     is_allowed,
     make_dir,
     delete_previous_files,
@@ -8,18 +8,11 @@ from faceMatch.utils.file_utils import (
     create_temp_directory_with_age_limit
 )
 
-from faceMatch.utils.image_utils import (
+from src.utils.image_utils import (
     get_safe_filename,
     save_image,
     load_image,
     load_config
-)
-
-from faceMatch.utils.reference_utils import (
-    save_reference_image,
-    get_reference_image_path,
-    list_reference_images,
-    delete_reference_image
 )
 
 # Export all functions at the package level for backward compatibility
@@ -33,9 +26,5 @@ __all__ = [
     'get_safe_filename',
     'save_image',
     'load_image',
-    'load_config',
-    'save_reference_image',
-    'get_reference_image_path',
-    'list_reference_images',
-    'delete_reference_image'
+    'load_config'
 ]

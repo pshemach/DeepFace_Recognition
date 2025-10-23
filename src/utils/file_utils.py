@@ -4,7 +4,7 @@ import tempfile
 import time
 import uuid
 from werkzeug.utils import secure_filename
-from faceMatch.constant import ALLOWED_FILE_EXTENSIONS
+from src.constant import ALLOWED_FILE_EXTENSIONS
 
 ALLOWED_EXTENSIONS = {ext.lower() for ext in ALLOWED_FILE_EXTENSIONS}
 previous_temp_dirs = []

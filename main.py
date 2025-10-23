@@ -2,22 +2,20 @@ import os
 import numpy as np
 import logging
 import json
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from werkzeug.utils import secure_filename
 from deepface import DeepFace
 import tempfile
-from typing import List, Any
-# Configure logging
-from faceMatch.constant import (
-    UPLOAD_FOLDER, FACE_MODEL, SELECTED_MODEL_KEY, MATRICES, ALLOWED_FILE_EXTENSIONS
+from typing import List
+from src.utils.file_utils import is_allowed
+from src.pipeline.deepface_pipe import verify_faces, extract_embedding, detect_emotion
+from src.utils.logger import logging
+from src.constant import (
+    UPLOAD_FOLDER
 )
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Face Recognition API", version="1.0.0")
@@ -31,83 +29,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Utility Functions
-ALLOWED_EXTENSIONS = {ext.lower() for ext in ALLOWED_FILE_EXTENSIONS}
-
-def is_allowed(filename: str) -> bool:
-    """Check if the file has an allowed extension."""
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def verify_faces(image_path: str, reference_embedding: List[float]):
-    """Compare an image with a reference embedding."""
-    try:
-        logger.info("Verifying face with DeepFace:")
-        logger.info("Image path: %s", image_path)
-        logger.info("Model: %s", FACE_MODEL[SELECTED_MODEL_KEY])
-        logger.info("Distance metric: %s", MATRICES[2])
-
-        # Check if the image file exists
-        if not os.path.exists(image_path):
-            return {"error": f"Comparison image file not found: {image_path}"}
-
-        # Validate image
-        try:
-            from PIL import Image
-            img = Image.open(image_path)
-            img.verify()  # Verify it's a valid image
-            logger.info("Image is valid")
-        except Exception as img_error:
-            logger.error("Invalid image file: %s", str(img_error))
-            return {"error": f"Invalid image file: {str(img_error)}"}
-
-        # Extract embedding for uploaded image
-        uploaded_embedding = DeepFace.represent(
-            img_path=image_path,
-            model_name=FACE_MODEL[SELECTED_MODEL_KEY],
-            enforce_detection=False  # Don't enforce face detection
-        )[0]['embedding']
-        uploaded_embedding = np.array(uploaded_embedding)
-
-        # Convert reference embedding to numpy array
-        reference_embedding = np.array(reference_embedding)
-
-        # Compute distance
-        if MATRICES[2] == "cosine":
-            distance = np.dot(reference_embedding, uploaded_embedding) / (
-                np.linalg.norm(reference_embedding) * np.linalg.norm(uploaded_embedding)
-            )
-            distance = 1 - distance  # Convert similarity to distance
-        elif MATRICES[2] == "euclidean":
-            distance = np.linalg.norm(reference_embedding - uploaded_embedding)
-        elif MATRICES[2] == "euclidean_l2":
-            distance = np.sqrt(np.sum((reference_embedding - uploaded_embedding) ** 2))
-
-        # Threshold (adjust based on model and metric)
-        threshold = 0.4  # Example for Facenet512 with cosine
-        verified = bool(distance <= threshold)  # Convert to Python bool
-
-        result = {
-            "verified": verified,
-            "distance": round(float(distance), 2),  # Convert to Python float
-            "threshold": round(float(threshold), 2)  # Convert to Python float
-        }
-        logger.info("Verification result: %s", result)
-        return result
-    except Exception as e:
-        import traceback
-        error_traceback = traceback.format_exc()
-        logger.error("Error in verify_faces: %s", str(e))
-        logger.error("Traceback: %s", error_traceback)
-        return {"error": f"DeepFace error: {str(e)}"}
-
 # Pydantic Models
 class ReferenceResponse(BaseModel):
     embedding: List[float]
 
 class CompareResponse(BaseModel):
     result: dict
-
-# Endpoints
 
 @app.post("/upload_reference", response_model=ReferenceResponse)
 async def upload_reference(image: UploadFile = File(...)):
@@ -119,19 +46,16 @@ async def upload_reference(image: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Invalid file extension")
 
     # Save image temporarily
-    temp_path = os.path.join(tempfile.gettempdir(), secure_filename(image.filename))
+    temp_image = os.path.join(UPLOAD_FOLDER, secure_filename(image.filename))
     try:
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
         content = await image.read()
-        with open(temp_path, "wb") as f:
+        with open(temp_image, "wb") as f:
             f.write(content)
-        logger.info("Image saved temporarily at: %s", temp_path)
+        logger.info("Image saved temporarily at: %s", temp_image)
 
         # Extract embedding
-        embedding = DeepFace.represent(
-            img_path=temp_path,
-            model_name=FACE_MODEL[SELECTED_MODEL_KEY],
-            enforce_detection=True
-        )[0]['embedding']
+        embedding = extract_embedding(image_path=temp_image)
         logger.info("Embedding extracted for image: %s", image.filename)
 
         return ReferenceResponse(embedding=embedding)
@@ -140,9 +64,9 @@ async def upload_reference(image: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
     finally:
         try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                logger.info("Temporary file deleted: %s", temp_path)
+            if os.path.exists(temp_image):
+                os.remove(temp_image)
+                logger.info("Temporary file deleted: %s", temp_image)
         except Exception as e:
             logger.warning("Error removing temp file: %s", str(e))
 
@@ -158,23 +82,16 @@ async def compare_with_reference(
         logger.error("Invalid file extension for %s", image.filename)
         raise HTTPException(status_code=400, detail="Invalid file extension")
     
-    # Parse the embedding from JSON string
+    # Parse the embedding from JSON string - DIRECT LIST
     try:
-        # Try to parse as JSON object with "embedding" key
-        embedding_data = json.loads(embedding)
-        
-        # Check if it's wrapped in {"embedding": [...]} format
-        if isinstance(embedding_data, dict) and "embedding" in embedding_data:
-            reference_embedding_list = embedding_data["embedding"]
-        # Or if it's directly a list
-        elif isinstance(embedding_data, list):
-            reference_embedding_list = embedding_data
-        else:
-            raise HTTPException(status_code=400, detail="Invalid embedding format")
+        reference_embedding_list = json.loads(embedding)
         
         # Validate it's a list of numbers
         if not isinstance(reference_embedding_list, list):
             raise HTTPException(status_code=400, detail="Embedding must be a list")
+        
+        if not reference_embedding_list:
+            raise HTTPException(status_code=400, detail="Embedding list cannot be empty")
         
         if not all(isinstance(x, (int, float)) for x in reference_embedding_list):
             raise HTTPException(status_code=400, detail="Embedding must contain only numbers")
@@ -183,7 +100,7 @@ async def compare_with_reference(
         
     except json.JSONDecodeError as e:
         logger.error("Invalid JSON in embedding parameter: %s", str(e))
-        raise HTTPException(status_code=400, detail=f"Invalid JSON format for embedding: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
     except HTTPException:
         raise
     except Exception as e:
@@ -200,7 +117,10 @@ async def compare_with_reference(
         logger.info("Image saved temporarily at: %s", temp_path)
         
         # Compare using verify_faces - pass the list directly
-        result = verify_faces(temp_path, reference_embedding_list)
+        matching = verify_faces(temp_path, reference_embedding_list)
+        emotions = detect_emotion(temp_path)
+        
+        result = { "matching": matching, "emotions":emotions}
         
         if isinstance(result, dict) and 'error' in result:
             logger.error("Error in verify_faces: %s", result['error'])
